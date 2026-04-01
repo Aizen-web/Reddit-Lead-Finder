@@ -218,6 +218,35 @@ MAX_AGE_HOURS = 48
 # How many results per search query (max 100 for Reddit's JSON)
 RESULTS_PER_QUERY = 100
 
+# How many pages to fetch per query (100 results each → 4 pages = 400/query)
+PAGES_PER_QUERY = 4
+
+# ── Subreddits to scrape "new" posts from ───────────────────────────
+# These are subreddits where people commonly post looking for web work.
+# We pull their newest posts directly — no keyword search needed.
+LEAD_SUBREDDITS = [
+    "forhire",
+    "slavelabour",
+    "smallbusiness",
+    "Entrepreneur",
+    "startups",
+    "webdev",
+    "web_design",
+    "freelance",
+    "hiring",
+    "jobbit",
+    "DesignJobs",
+    "ecommerce",
+    "shopify",
+    "wordpress",
+    "squarespace",
+    "digitalnomad",
+    "SideProject",
+]
+
+# How many "new" posts to pull from each subreddit
+POSTS_PER_SUBREDDIT = 100
+
 # ── Web-relevance gate ──────────────────────────────────────────────
 # A post MUST contain at least one of these terms to be considered.
 # This prevents scoring posts about concert tickets, hair advice, etc.

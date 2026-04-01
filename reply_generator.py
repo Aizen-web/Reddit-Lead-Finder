@@ -84,16 +84,13 @@ def fill_replies_with_codex(json_path: str) -> bool:
 
     try:
         import shutil
-        codex_path = shutil.which("codex")
-        if not codex_path:
-            raise FileNotFoundError
+        codex_cmd = shutil.which("codex") or shutil.which("codex.cmd") or "codex"
 
         result = subprocess.run(
-            [codex_path, "--quiet", "--approval-mode", "full-auto", "-p", prompt],
+            [codex_cmd, "exec", "--full-auto", prompt],
             capture_output=True,
             text=True,
             timeout=300,  # 5 min max for all replies
-            env={**os.environ},
         )
 
         if result.returncode == 0:

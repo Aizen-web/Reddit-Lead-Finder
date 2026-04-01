@@ -26,6 +26,9 @@ from config import (
     MIN_SCORE_WARM,
     RESULTS_PER_QUERY,
     SEARCH_QUERIES,
+    PAGES_PER_QUERY,
+    LEAD_SUBREDDITS,
+    POSTS_PER_SUBREDDIT,
 )
 from reply_generator import fill_replies_with_codex
 from scorer import ScoredLead, score_post
@@ -50,12 +53,8 @@ REQUEST_DELAY = 2.0
 
 
 # ── Search all of Reddit ────────────────────────────────────────────
-def search_reddit(query: str) -> list[dict]:
-    """Run a single search query against all of Reddit's public JSON."""
-    url = (
-        f"https://www.reddit.com/search.json"
-        f"?q={quote_plus(query)}&sort=new&t=week&type=link&limit={RESULTS_PER_QUERY}"
-    )
+def _fetch_json(url: str) -> list[dict]:
+    """Fetch a single Reddit JSON listing page and return its children."""
     try:
         resp = SESSION.get(url, timeout=15)
         if resp.status_code == 429:
@@ -63,9 +62,10 @@ def search_reddit(query: str) -> list[dict]:
             time.sleep(10)
             resp = SESSION.get(url, timeout=15)
         if resp.status_code != 200:
-            console.print(f"  [dim red]⚠ Search returned {resp.status_code}[/]")
+            console.print(f"  [dim red]⚠ HTTP {resp.status_code}[/]")
             return []
-        return resp.json().get("data", {}).get("children", [])
+        data = resp.json().get("data", {})
+        return data.get("children", [])
     except requests.RequestException as exc:
         console.print(f"  [dim red]⚠ {exc}[/]")
         return []
@@ -73,13 +73,84 @@ def search_reddit(query: str) -> list[dict]:
         return []
 
 
+def search_reddit(query: str) -> list[dict]:
+    """Run a paginated search query against all of Reddit's public JSON.
+    Fetches up to PAGES_PER_QUERY pages (100 results each)."""
+    all_children: list[dict] = []
+    after: str | None = None
+
+    for page in range(PAGES_PER_QUERY):
+        url = (
+            f"https://www.reddit.com/search.json"
+            f"?q={quote_plus(query)}&sort=new&t=week&type=link&limit={RESULTS_PER_QUERY}"
+        )
+        if after:
+            url += f"&after={after}"
+
+        children = _fetch_json(url)
+        if not children:
+            break
+
+        all_children.extend(children)
+
+        # Get the "after" cursor for the next page
+        last_name = children[-1].get("data", {}).get("name")
+        if not last_name:
+            break
+        after = last_name
+        time.sleep(REQUEST_DELAY)
+
+    return all_children
+
+
+def fetch_subreddit_new(subreddit: str) -> list[dict]:
+    """Pull the newest posts from a subreddit (no keyword search needed)."""
+    url = (
+        f"https://www.reddit.com/r/{subreddit}/new.json"
+        f"?limit={POSTS_PER_SUBREDDIT}"
+    )
+    return _fetch_json(url)
+
+
+def _process_post(post: dict, seen_ids: set[str], now: float) -> ScoredLead | None:
+    """Score a single post dict. Returns a ScoredLead or None."""
+    post_id = post.get("id", "")
+    if post_id in seen_ids:
+        return None
+    seen_ids.add(post_id)
+
+    created_utc = post.get("created_utc", 0)
+    age_hours = (now - created_utc) / 3600
+    if age_hours > MAX_AGE_HOURS:
+        return None
+
+    subreddit = post.get("subreddit", "unknown")
+    permalink = post.get("permalink", "")
+    lead = score_post(
+        title=post.get("title", ""),
+        body=post.get("selftext", ""),
+        url=f"https://reddit.com{permalink}",
+        subreddit=subreddit,
+        author=post.get("author", "[deleted]"),
+        reddit_score=post.get("score", 0),
+        num_comments=post.get("num_comments", 0),
+        created_utc=created_utc,
+        age_hours=age_hours,
+    )
+    if lead and lead.lead_score >= MIN_SCORE_WARM:
+        return lead
+    return None
+
+
 def run_full_scan() -> list[ScoredLead]:
-    """Run all buyer-focused queries across all of Reddit."""
+    """Run all buyer-focused queries + scrape lead subreddits."""
     seen_ids: set[str] = set()
     all_leads: list[ScoredLead] = []
     now = time.time()
     total_posts = 0
 
+    # ── Phase 1: Keyword search across all of Reddit (paginated) ────
+    console.print("[bold]Phase 1:[/] Keyword search across all of Reddit\n")
     for i, query in enumerate(SEARCH_QUERIES, 1):
         short_q = query[:60] + ("…" if len(query) > 60 else "")
         console.print(f"  [dim][{i}/{len(SEARCH_QUERIES)}] {short_q}[/]")
@@ -87,38 +158,36 @@ def run_full_scan() -> list[ScoredLead]:
         posts = search_reddit(query)
         for item in posts:
             post = item.get("data", {})
-            post_id = post.get("id", "")
-
-            if post_id in seen_ids:
-                continue
-            seen_ids.add(post_id)
             total_posts += 1
-
-            created_utc = post.get("created_utc", 0)
-            age_hours = (now - created_utc) / 3600
-            if age_hours > MAX_AGE_HOURS:
-                continue
-
-            subreddit = post.get("subreddit", "unknown")
-            permalink = post.get("permalink", "")
-            lead = score_post(
-                title=post.get("title", ""),
-                body=post.get("selftext", ""),
-                url=f"https://reddit.com{permalink}",
-                subreddit=subreddit,
-                author=post.get("author", "[deleted]"),
-                reddit_score=post.get("score", 0),
-                num_comments=post.get("num_comments", 0),
-                created_utc=created_utc,
-                age_hours=age_hours,
-            )
-            if lead and lead.lead_score >= MIN_SCORE_WARM:
+            lead = _process_post(post, seen_ids, now)
+            if lead:
                 all_leads.append(lead)
 
         if i < len(SEARCH_QUERIES):
             time.sleep(REQUEST_DELAY)
 
-    console.print(f"\n  [dim]Scanned {total_posts} posts from {len(SEARCH_QUERIES)} queries across all of Reddit[/]")
+    console.print(f"\n  [dim]Search phase: {total_posts} posts from {len(SEARCH_QUERIES)} queries[/]\n")
+
+    # ── Phase 2: Scrape newest posts from known lead subreddits ─────
+    console.print(f"[bold]Phase 2:[/] Scraping newest posts from {len(LEAD_SUBREDDITS)} subreddits\n")
+    sub_posts = 0
+    for i, sub in enumerate(LEAD_SUBREDDITS, 1):
+        console.print(f"  [dim][{i}/{len(LEAD_SUBREDDITS)}] r/{sub}[/]")
+
+        posts = fetch_subreddit_new(sub)
+        for item in posts:
+            post = item.get("data", {})
+            sub_posts += 1
+            lead = _process_post(post, seen_ids, now)
+            if lead:
+                all_leads.append(lead)
+
+        if i < len(LEAD_SUBREDDITS):
+            time.sleep(REQUEST_DELAY)
+
+    total_posts += sub_posts
+    console.print(f"\n  [dim]Subreddit phase: {sub_posts} posts from {len(LEAD_SUBREDDITS)} subreddits[/]")
+    console.print(f"  [dim]Total scanned: {total_posts} posts[/]")
 
     # Deduplicate by URL and keep highest score
     best: dict[str, ScoredLead] = {}
@@ -199,8 +268,8 @@ def save_json(leads: list[ScoredLead]) -> Path:
 # ── Entrypoint ──────────────────────────────────────────────────────
 def main() -> None:
     console.print("[bold cyan]━━━ Reddit Lead Finder ━━━[/]\n")
-    console.print(f"Searching ALL of Reddit with {len(SEARCH_QUERIES)} buyer-focused queries "
-                  f"(≤ {MAX_AGE_HOURS}h old)  —  no API key needed\n")
+    console.print(f"Searching ALL of Reddit with {len(SEARCH_QUERIES)} queries × {PAGES_PER_QUERY} pages "
+                  f"+ {len(LEAD_SUBREDDITS)} subreddits  (≤ {MAX_AGE_HOURS}h old)\n")
 
     leads = run_full_scan()
 
