@@ -1,5 +1,5 @@
 """
-reply_generator.py — Fill in generated_reply column of a leads CSV using Codex CLI.
+reply_generator.py — Fill in generated_reply key of a leads JSON using Codex CLI.
 """
 
 from __future__ import annotations
@@ -44,10 +44,10 @@ SYSTEM_PROMPT = textwrap.dedent("""\
 """)
 
 
-def fill_replies_with_codex(csv_path: str) -> bool:
+def fill_replies_with_codex(json_path: str) -> bool:
     """
-    Hand the CSV file to Codex CLI. It will:
-    1. Validate each lead — delete rows that aren't real buyers
+    Hand the JSON file to Codex CLI. It will:
+    1. Validate each lead — delete objects that aren't real buyers
     2. Generate a tailored reply for each remaining lead
     Returns True on success.
     """
@@ -55,10 +55,10 @@ def fill_replies_with_codex(csv_path: str) -> bool:
         {SYSTEM_PROMPT}
 
         TASK:
-        Open the CSV file at: {csv_path}
+        Open the JSON file at: {json_path}
 
         STEP 1 — VALIDATE AND PRUNE:
-        Go through every row and DELETE rows that match any of these:
+        Go through every object in the JSON array and DELETE objects that match any of these:
         - The post is someone OFFERING their services (freelancer, agency, dev promoting themselves)
         - The post is tagged [For Hire] or is clearly a seller advertising
         - The post is about a general business topic that doesn't need website help
@@ -66,25 +66,30 @@ def fill_replies_with_codex(csv_path: str) -> bool:
         - The post is asking for advice on running their own dev/design agency
         - The post has nothing to do with needing a website built, redesigned, or fixed
         - The post is from someone who clearly won't pay (students, hobbyists, "free" requests)
-        Only keep rows where the person is a GENUINE BUYER — someone who needs
+        Only keep objects where the person is a GENUINE BUYER — someone who needs
         website work done and would realistically pay a professional.
 
         STEP 2 — GENERATE REPLIES:
-        For every remaining row where the "generated_reply" column is empty:
-        - Read the "title", "body_preview", "subreddit", and "author" columns.
+        For every remaining object where the "generated_reply" key is empty:
+        - Read the "title", "body_preview", "subreddit", and "author" keys.
         - Write a unique, human-sounding Reddit reply tailored to that specific post.
         - Follow all the reply rules in the system prompt above.
-        - Put the reply text into the "generated_reply" column for that row.
+        - Put the reply text into the "generated_reply" key for that object.
         - Make sure each reply is different — vary openers, advice, and tone.
-        - Do NOT touch any other columns.
+        - Do NOT touch any other keys.
         - Save the file when done.
     """)
 
-    console.print("\n[bold cyan]Handing CSV to Codex CLI to generate replies…[/]\n")
+    console.print("\n[bold cyan]Handing JSON to Codex CLI to generate replies…[/]\n")
 
     try:
+        import shutil
+        codex_path = shutil.which("codex")
+        if not codex_path:
+            raise FileNotFoundError
+
         result = subprocess.run(
-            ["codex", "--quiet", "--approval-mode", "full-auto", "-p", prompt],
+            [codex_path, "--quiet", "--approval-mode", "full-auto", "-p", prompt],
             capture_output=True,
             text=True,
             timeout=300,  # 5 min max for all replies
@@ -108,7 +113,7 @@ def fill_replies_with_codex(csv_path: str) -> bool:
             "[bold red]ERROR:[/] Codex CLI not found.\n"
             "  Install it with:  npm install -g @openai/codex\n"
             "  Then set OPENAI_API_KEY in your environment.\n"
-            "  You can also fill in the generated_reply column manually."
+            "  You can also fill in the generated_reply key manually."
         )
         return False
     except subprocess.TimeoutExpired:

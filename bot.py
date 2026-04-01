@@ -10,7 +10,7 @@ Strategy: 7 buyer-focused search queries across all of Reddit.
 
 from __future__ import annotations
 
-import csv
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -169,31 +169,30 @@ def print_leads(leads: list[ScoredLead]) -> None:
         console.print("─" * 80 + "\n")
 
 
-def save_csv(leads: list[ScoredLead]) -> Path:
+def save_json(leads: list[ScoredLead]) -> Path:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M")
-    path = OUTPUT_DIR / f"leads_{ts}.csv"
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            "tier", "lead_score", "age_hours", "subreddit", "author",
-            "title", "body_preview", "keywords", "reddit_score",
-            "comments", "url", "generated_reply",
-        ])
-        for lead in leads:
-            writer.writerow([
-                lead.tier,
-                lead.lead_score,
-                lead.age_hours,
-                lead.subreddit,
-                lead.author,
-                lead.title,
-                lead.short_body,
-                "; ".join(lead.matched_keywords),
-                lead.score,
-                lead.num_comments,
-                lead.url,
-                lead.generated_reply,
-            ])
+    path = OUTPUT_DIR / f"leads_{ts}.json"
+    
+    data = []
+    for lead in leads:
+        data.append({
+            "tier": lead.tier,
+            "lead_score": lead.lead_score,
+            "age_hours": lead.age_hours,
+            "subreddit": lead.subreddit,
+            "author": lead.author,
+            "title": lead.title,
+            "body_preview": lead.short_body,
+            "keywords": lead.matched_keywords,
+            "reddit_score": lead.score,
+            "comments": lead.num_comments,
+            "url": lead.url,
+            "generated_reply": lead.generated_reply,
+        })
+        
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+        
     return path
 
 
@@ -208,17 +207,17 @@ def main() -> None:
     print_leads(leads)
 
     if leads:
-        # Step 1: Save CSV with empty generated_reply column
-        csv_path = save_csv(leads)
-        console.print(f"\n[green]✔ Saved {len(leads)} leads to {csv_path}[/]")
+        # Step 1: Save JSON with empty generated_reply field
+        json_path = save_json(leads)
+        console.print(f"\n[green]✔ Saved {len(leads)} leads to {json_path}[/]")
 
-        # Step 2: Hand the CSV to Codex CLI to fill in all replies at once
-        success = fill_replies_with_codex(str(csv_path.resolve()))
+        # Step 2: Hand the JSON to Codex CLI to fill in all replies at once
+        success = fill_replies_with_codex(str(json_path.resolve()))
         if success:
-            console.print(f"[green]✔ Replies written into {csv_path}[/]")
+            console.print(f"[green]✔ Replies written into {json_path}[/]")
         else:
-            console.print(f"[yellow]CSV saved without replies. You can fill them in manually or re-run Codex:[/]")
-            console.print(f'  [dim]codex -p "Fill the generated_reply column in {csv_path.resolve()}"[/]')
+            console.print(f"[yellow]JSON saved without replies. You can fill them in manually or re-run Codex:[/]")
+            console.print(f'  [dim]codex -p "Fill the generated_reply key in {json_path.resolve()}"[/]')
 
     console.print()
 
